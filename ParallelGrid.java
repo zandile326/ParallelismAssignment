@@ -1,196 +1,110 @@
+import java.awt.image.BufferedImage;
+import java.io.File;//important classes
+import java.io.IOException;
+import java.util.concurrent.RecursiveTask;
+import javax.imageio.ImageIO;
 package serialAbelianSandpile;
 
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.RecursiveAction;
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.IOException;
-public class ParallelGrid {
-private int[][] localUpdateGrid;
-    private ForkJoinPool pool;
+
+public class ParallelGrid extends RecursiveTask<Boolean> {
+    private static final int THRESHOLD = 10000;
 
     private int rows, columns;
-    private int[][] grid;
-        private static final int THRESHOLD = 10;
+    private int[][] grid, updateGrid;
+    private int startRow, endRow;
+    private int startColumn, endColumn;
 
-    public ParallelGrid(int rows, int columns, int numThreads) {
-        this.rows = rows + 2; 
-        this.columns = columns + 2; 
-        this.grid = new int[this.rows][this.columns];
-        this.localUpdateGrid = new int[this.rows][this.columns];
-        this.pool = new ForkJoinPool(numThreads); 
-        initializeGrid();
-    }
-
+   //initialisation of fields in the constructor 
     public ParallelGrid(int[][] initialGrid, int numThreads) {
-        this.rows = initialGrid.length + 2;
-        this.columns = initialGrid[0].length + 2;
-        this.grid = new int[this.rows][this.columns];
-        this.localUpdateGrid = new int[this.rows][this.columns];
-        this.pool = new ForkJoinPool(numThreads); 
-        initializeGrid(initialGrid);
-    }
+        this.rows = initialGrid.length;
+        this.columns = initialGrid[0].length;
+        this.grid = new int[rows + 2][columns + 2];
+        this.updateGrid = new int[rows + 2][columns + 2];
 
-    private void initializeGrid() {
-       
+        
         for (int i = 0; i < rows; i++) {
             for (int j = 0; j < columns; j++) {
-                grid[i][j] = 0;
-                localUpdateGrid[i][j] = 0;
+                grid[i + 1][j + 1] = initialGrid[i][j];
             }
         }
+
+        this.startRow = 1;
+        this.endRow = rows;
+        this.startColumn = 1;
+        this.endColumn = columns;
     }
 
-    private void initializeGrid(int[][] initialGrid) {
-        initializeGrid(); // Initialize the grid
-        for (int i = 1; i < rows - 1; i++) {
-            for (int j = 1; j < columns - 1; j++) {
-                grid[i][j] = initialGrid[i - 1][j - 1];
-            }
-        }
+    //it create instances of the ParallelGrid class for some subregions 
+    private ParallelGrid(int[][] grid, int startRow, int endRow, int startColumn, int endColumn, int[][] updateGrid) {
+        this.rows = grid.length;
+        this.columns = grid[0].length;
+        this.grid = grid;
+        this.updateGrid = updateGrid;
+        this.startRow = startRow;
+        this.endRow = endRow;
+        this.startColumn = startColumn;
+        this.endColumn = endColumn;
     }
 
-    public void runSimulation() {
-    int steps = 0;
-        boolean changed;
-        long startTime = System.currentTimeMillis();
-                do {
-            changed = update();
-            steps++;
-        } while (changed);
+    @Override
+    //core computation for updating the grid in parallel
+    protected Boolean compute() {
+        boolean change = false;
 
-        long endTime = System.currentTimeMillis();
-        long duration = endTime - startTime;
-
-        System.out.println("Rows: " + (rows - 2)+", "+"Columns: " + (columns - 2));
-        System.out.println("Simulation complete, writing image...");
-        System.out.println("Number of steps to stable state: " + steps);
-        System.out.println("Time: " + duration + " ms");
-
-        try {
-            gridToImage("output.png");
-        } catch (IOException e) {
-            System.err.println("Error writing image: " + e.getMessage());
-        }
-    }
-
-    private boolean update() {
-        boolean[] hasChange = {false};
-        GridUpdateTask task = new GridUpdateTask(1, rows - 1, 1, columns - 1, hasChange);
-        pool.invoke(task);
-        boolean changeOccurred = hasChange[0];
-
-        if (changeOccurred) {
-            copyLocalToGrid();
-        }
-
-        return changeOccurred;
-    }
-
-    private void copyLocalToGrid() {
-  
-        for (int i = 1; i < rows - 1; i++) {
-            for (int j = 1; j < columns - 1; j++) {
-                grid[i][j] = localUpdateGrid[i][j];
-            }
-        }
-    }
-
-    private class GridUpdateTask extends RecursiveAction {
-        private int startRow, endRow, startCol, endCol;
-        private boolean[] change;
-
-        GridUpdateTask(int startRow, int endRow, int startCol, int endCol, boolean[] change) {
-            this.startRow = startRow;
-            this.endRow = endRow;
-            this.startCol = startCol;
-            this.endCol = endCol;
-            this.change = change;
-        }
-
-        @Override
-        protected void compute() {
-            if ((endRow - startRow) <= THRESHOLD && (endCol - startCol) <= THRESHOLD) {
-               
-                for (int i = startRow; i < endRow; i++) {
-                    for (int j = startCol; j < endCol; j++) {
-                        int currentValue = grid[i][j];
-                        int newValue = (currentValue % 4) +
-                                (grid[i - 1][j] / 4) +
-                                (grid[i + 1][j] / 4) +
-                                (grid[i][j - 1] / 4) +
-                                (grid[i][j + 1] / 4);
-
-                        if (currentValue != newValue) {
-                            change[0] = true;
-                        }
-
-                        localUpdateGrid[i][j] = newValue;
+        if ((endRow - startRow) * (endColumn - startColumn) <= THRESHOLD) {
+           
+            for (int i = startRow; i <= endRow; i++) {
+                for (int j = startColumn; j <= endColumn; j++) {
+                    updateGrid[i][j] = (grid[i][j] % 4) +
+                                       (grid[i - 1][j] / 4) +
+                                       (grid[i + 1][j] / 4) +
+                                       (grid[i][j - 1] / 4) +
+                                       (grid[i][j + 1] / 4);
+                    if (grid[i][j] != updateGrid[i][j]) {
+                        change = true;
                     }
                 }
-            } else {
-          int midRow = (startRow + endRow) / 2;//spill the tasks
-                int midCol = (startCol + endCol) / 2;
-
-                invokeAll(
-                        new GridUpdateTask(startRow, midRow, startCol, midCol, change),
-                        new GridUpdateTask(startRow, midRow, midCol, endCol, change),
-                        new GridUpdateTask(midRow, endRow, startCol, midCol, change),
-                        new GridUpdateTask(midRow, endRow, midCol, endCol, change)
-                );
             }
-        }
-    }
+        } else {
+            
+            int midRow = (startRow + endRow) / 2;
+            int midColumn = (startColumn + endColumn) / 2;
 
-   
-    public void printGrid() {
-        
-        System.out.printf("Grid:\n");
-        System.out.printf("+");
-        for (int j = 1; j < columns - 1; j++) System.out.printf("  --");
-        System.out.printf("+\n");
-        for (int i = 1; i < rows - 1; i++) {
-            System.out.printf("|");
-            for (int j = 1; j < columns - 1; j++) {
-                if (grid[i][j] > 0)
-                    System.out.printf("%4d", grid[i][j]);
-                else
-                    System.out.printf("    ");
-            }
-            System.out.printf("|\n");
+            ParallelGrid topLeft = new ParallelGrid(grid, startRow, midRow, startColumn, midColumn, updateGrid);
+            ParallelGrid topRight = new ParallelGrid(grid, startRow, midRow, midColumn + 1, endColumn, updateGrid);
+            ParallelGrid bottomLeft = new ParallelGrid(grid, midRow + 1, endRow, startColumn, midColumn, updateGrid);
+            ParallelGrid bottomRight = new ParallelGrid(grid, midRow + 1, endRow, midColumn + 1, endColumn, updateGrid);
+
+            invokeAll(topLeft, topRight, bottomLeft, bottomRight);
+
+            change = topLeft.join() || topRight.join() || bottomLeft.join() || bottomRight.join();
         }
-        System.out.printf("+");
-        for (int j = 1; j < columns - 1; j++) System.out.printf("  --");
-        System.out.printf("+\n\n");
+
+        return change;
     }
- public void setAll(int value) {
+//synchronizes the current state of the grid with the computed values that are new.
+    public void nextTimeStep() {
        
-        for (int k = 1; k < rows - 1; k++) {
-            for (int j = 1; j < columns - 1; j++) {
-                grid[k][j] = value;
+        for (int i = 1; i <= rows; i++) {
+            for (int j = 1; j <= columns; j++) {
+                grid[i][j] = updateGrid[i][j];
             }
         }
     }
+//transition grid to image
+    public void gridToImage(String file_Name) throws IOException {
+        BufferedImage dstImage = new BufferedImage(columns + 2, rows + 2, BufferedImage.TYPE_INT_ARGB);
 
-    public void gridToImage(String fileName) throws IOException {
-       
-        BufferedImage dstImage = new BufferedImage(rows - 2, columns - 2, BufferedImage.TYPE_INT_ARGB);
-        int b = 0;
-        int r = 0;
-        int a = 0;
-        int g = 0;
-        
-
-        for (int i = 1; i < rows - 1; i++) {
-            for (int j = 1; j < columns - 1; j++) {
-                b = 0;
-                r = 0;
-                g = 0;
-                
+        for (int i = 0; i < rows + 2; i++) {
+            for (int j = 0; j < columns + 2; j++) {
+                int a = 255; 
+                int r = 0; 
+                int g = 0; 
+                int b = 0; 
 
                 switch (grid[i][j]) {
                     case 0:
+                        a = 0; 
                         break;
                     case 1:
                         g = 255;
@@ -204,27 +118,13 @@ private int[][] localUpdateGrid;
                     default:
                         break;
                 }
-                int dpixel = (0xff000000)
-                        | (a << 24)
-                        | (r << 16)
-                        | (g << 8)
-                        | b;
-                dstImage.setRGB(i - 1, j - 1, dpixel); 
+
+                int dpixel = (a << 24) | (r << 16) | (g << 8) | b;
+                dstImage.setRGB(j, i, dpixel); 
             }
         }
 
-        File dstFile = new File(fileName);
+        File dstFile = new File(file_Name);
         ImageIO.write(dstImage, "png", dstFile);
     }
-
-    public static void main(String[] args) {
-        
-        int rows = 65;
-        int columns = 65;//trying to test when the dimensions are static to 65(test)
-        int numThreads = Runtime.getRuntime().availableProcessors();
-
-        ParallelGrid grid = new ParallelGrid(rows, columns, numThreads);
-        grid.setAll(1); 
-        grid.runSimulation(); // Run the simulation 
     }
-}
